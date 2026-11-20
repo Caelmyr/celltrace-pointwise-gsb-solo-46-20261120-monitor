@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>CellTrace EL / Inspection bench</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script type="module" src="/static/app.js"></script>
+</head>
+<body>
+  <div id="shell">
+    <aside id="sidebar" aria-label="Inspection library">
+      <a class="brand" href="/" aria-label="CellTrace EL home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+        <span><b>CellTrace</b><small>EL INSPECTION</small></span>
+      </a>
+      <div class="library-actions">
+        <button class="primary" id="new-inspection"><span aria-hidden="true">＋</span> New inspection</button>
+        <button id="open-demo">Open training sample</button>
+      </div>
+      <section class="library">
+        <div class="label-row"><h2>Inspections</h2><span id="inspection-count" class="count"></span></div>
+        <label class="search"><span aria-hidden="true">⌕</span><input type="search" id="search" placeholder="Find serial or lot" aria-label="Find serial or lot"></label>
+        <nav id="case-list" aria-label="Available inspections"></nav>
+      </section>
+      <div class="sidebar-footer">
+        <button id="import-inspection">Import exchange package</button>
+        <span><i class="dot"></i> Local workspace</span>
+      </div>
+    </aside>
+    <main id="main">
+      <div id="main-content" aria-busy="true"></div>
+    </main>
+  </div>
+  <dialog id="dialog" aria-labelledby="dialog-title">
+    <div id="dialog-content"></div>
+  </dialog>
+  <div id="status" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

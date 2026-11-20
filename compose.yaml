@@ -1,0 +1,17 @@
+name: solo49-celltrace
+services:
+  celltrace:
+    build: .
+    image: solo49-celltrace:1.0
+    network_mode: bridge
+    ports:
+      - "127.0.0.1:${CELLTRACE_PORT:-18949}:8000"
+    volumes:
+      - inspections:/var/lib/celltrace
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; assert urlopen('http://127.0.0.1:8000/api/health', timeout=4).status == 200"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+volumes:
+  inspections:
