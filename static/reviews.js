@@ -2,6 +2,7 @@ import {
   $, $$, ROLE, badge, button, changeLabel, dateLabel, definition, download, e, field, format,
   itemCard, metrics, percent, request, submit, table, wireForm,
 } from "./ui.js";
+import {seamConflictBanner} from "./seams.js";
 
 const CATEGORIES = [["dark", "Dark area"], ["crack", "Crack"], ["suspect", "Needs review"], ["capture", "Capture artifact"], ["general", "General"]];
 const STATES = [["open", "Open"], ["hold", "Hold"], ["confirmed", "Confirmed"], ["cleared", "Cleared"]];
@@ -20,7 +21,8 @@ export function renderFindings(app, root) {
       <td><div class="toolbar"><button type="button" data-evidence="${item.id}" class="compact">Show evidence</button>
       ${issued ? "" : `<button type="button" data-edit-finding="${item.id}" class="compact">Edit</button>`}</div></td></tr>`).join("")}
     </tbody></table></div>` : '<p class="empty-line">No findings recorded for this inspection.</p>';
-  root.innerHTML = `<section class="card"><div class="card-header"><h2>Recorded image findings</h2>
+  root.innerHTML = `${app.workspace.seamConflicts?.length ? seamConflictBanner(app.workspace.seamConflicts) : ""}
+    <section class="card"><div class="card-header"><h2>Recorded image findings</h2>
     ${button("draw-new-finding", "Draw finding on image", "primary", issued || !["high", "low"].some((role) => app.case.active[role]))}</div>
     ${rows}</section>`;
   $("#draw-new-finding", root).onclick = () => {

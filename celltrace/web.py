@@ -9,7 +9,7 @@ from .banding import capture_reference_profile, profile_summary, reference_band_
 from .engine import EL_LAYERS, MEASUREMENT_PLANES, Engine
 from .evidence import evidence_response
 from .exchange import create_exchange, import_exchange, preview_exchange
-from .geometry import cells_for
+from .grid import cells_for_plane
 from .images import png_bytes
 from .inspection import Inspections, inspection_payload
 from .lot import LotReview
@@ -26,6 +26,7 @@ from .render import (
 )
 from .reference_review import compare_canvas, compare_references, reference_result
 from .reports import issue_report, summarize_for_issue
+from .seam_review import seam_review
 from .store import Store
 from .tables import csv_data
 
@@ -161,7 +162,20 @@ def build_app(data_dir: str) -> Flask:
     @app.patch("/api/inspections/<identifier>/<operation>")
     def edit(identifier, operation):
         request_data = json_body()
-        return file_version(service.change(identifier, request_data.get("revision"), operation, request_data))
+        result = service.change(identifier, request_data.get("revision"), operation, request_data)
+        if operation == "grid-seam":
+            saved, conflicts = result
+            payload = inspection_payload(saved)
+            payload["seam_conflicts"] = conflicts
+            response = jsonify(payload)
+            response.headers["ETag"] = f'"{saved.id}-{saved.revision}"'
+            return response
+        return file_version(result)
+    @app.get("/api/inspections/<identifier>/seam-review")
+    def review_seams(identifier):
+        item = store.get(identifier)
+        with engine.slots:
+            return jsonify(seam_review(item, engine, get_role()))
 
     @app.post("/api/inspections/<identifier>/captures")
     def upload(identifier):
@@ -277,7 +291,7 @@ def build_app(data_dir: str) -> Flask:
         item = store.get(identifier)
         with engine.slots:
             ctx = engine.panel_context(item, get_role())
-            check, report = placement_report(ctx, item.plane, item.revision)
+            check, report = placement_report(ctx, item.plane, item.revision, item.grid_adjustments)
             if request.args.get("format") == "csv":
                 content = csv_data("placement", placement_rows(check))
                 return content_response(content, "text/csv", f"{item.module}-placement.csv")
@@ -305,7 +319,7 @@ def build_app(data_dir: str) -> Flask:
         choice(kind, "Cell layer", EL_LAYERS)
         item = store.get(identifier)
         row, col = parse_cell(cell_id, item.plane.rows, item.plane.cols)
-        selected = cells_for(item.plane)[row * item.plane.cols + col]
+        selected = cells_for_plane(item.plane, item.grid_adjustments)[row * item.plane.cols + col]
         with engine.slots:
             image = cell_crop(item, engine, get_role(), selected, kind)
         return content_response(png_bytes(image), "image/png")

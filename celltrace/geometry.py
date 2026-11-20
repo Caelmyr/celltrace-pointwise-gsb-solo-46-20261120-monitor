@@ -137,6 +137,7 @@ class Cell:
     bounds: tuple[int, int, int, int]
     interior: tuple[int, int, int, int]
     string: int
+    mask: np.ndarray | None = None
 
     @property
     def id(self) -> str:
@@ -148,31 +149,36 @@ class Cell:
         return slice(y0, y1), slice(x0, x1)
 
     @property
+    def box_view(self) -> tuple[slice, slice]:
+        x0, y0, x1, y1 = self.bounds
+        return slice(y0, y1), slice(x0, x1)
+
+    @property
     def pixels(self) -> int:
-        x0, y0, x1, y1 = self.interior
-        return (x1 - x0) * (y1 - y0)
+        # Measurement denominator: the owned pixels inside the analysis inset.
+        return int(self.interior_mask(self.view).sum())
 
     def covers(self, x: float, y: float) -> bool:
         left, upper, right, lower = self.bounds
         return left <= x < right and upper <= y < lower
 
+    def interior_mask(self, view: tuple[slice, slice]) -> np.ndarray:
+        """Owned-pixel mask cropped to an interior (inset) view."""
+        iy0, ix0 = view[0].start, view[1].start
+        if self.mask is None:
+            return np.ones(
+                (view[0].stop - iy0, view[1].stop - ix0), dtype=bool
+            )
+        top = self.bounds[1]
+        left = self.bounds[0]
+        return self.mask[iy0 - top:view[0].stop - top, ix0 - left:view[1].stop - left]
+
 
 def cells_for(plane: Plane) -> list[Cell]:
-    cells = []
-    x_edges = np.rint(np.linspace(0, plane.width, plane.cols + 1)).astype(int)
-    y_edges = np.rint(np.linspace(0, plane.height, plane.rows + 1)).astype(int)
-    for row, (y0, y1) in enumerate(zip(y_edges, y_edges[1:])):
-        for col, (x0, x1) in enumerate(zip(x_edges, x_edges[1:])):
-            ix = int((x1 - x0) * plane.inset)
-            iy = int((y1 - y0) * plane.inset)
-            axis_index = col if plane.string_axis == "columns" else row
-            cells.append(Cell(
-                row, col,
-                (int(x0), int(y0), int(x1), int(y1)),
-                (int(x0) + ix, int(y0) + iy, int(x1) - ix, int(y1) - iy),
-                axis_index // plane.string_size + 1,
-            ))
-    return cells
+    # Regular, unadjusted grid. Calibrated seams live in celltrace.grid and use
+    # the same Cell contract so every measurement follows seam corrections.
+    from .grid import cells_for_plane
+    return cells_for_plane(plane, None)
 
 
 def plane_polygon(points: tuple, plane: Plane) -> np.ndarray:

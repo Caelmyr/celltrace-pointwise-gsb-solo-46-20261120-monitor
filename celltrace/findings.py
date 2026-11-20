@@ -3,7 +3,8 @@ from dataclasses import asdict, replace
 import numpy as np
 
 from .calibration import PanelImage, support_reason
-from .geometry import cells_for, millimeter_scale, plane_polygon, polygon_mask, project, transform_for, validate_polygon
+from .geometry import millimeter_scale, plane_polygon, polygon_mask, project, transform_for, validate_polygon
+from .grid import cell_at, cells_for_plane
 from .images import distribution, histogram_rows
 from .model import (
     FINDING_CATEGORIES, FINDING_STATES, MAX_FINDINGS, MAX_POLYGON_POINTS, SENSOR_ROLES,
@@ -145,10 +146,13 @@ def measure_polygon(inspection: Inspection, panel: PanelImage, points: tuple) ->
     stats = distribution(panel.signal[usable])
     scale = millimeter_scale(inspection.plane)
     overlap = []
-    for cell in cells_for(inspection.plane):
-        count_in = int(mask[cell.view].sum())
+    for cell in cells_for_plane(inspection.plane, inspection.grid_adjustments):
+        view = cell.view
+        owned = cell.interior_mask(view)
+        count_in = int((mask[view] & owned).sum())
         if count_in:
-            overlap.append({"cell": cell.id, "pixels": count_in, "usable": int(usable[cell.view].sum())})
+            overlap.append({"cell": cell.id, "pixels": count_in,
+                            "usable": int((usable[view] & owned).sum())})
     rows, cols = np.nonzero(mask)
     center = [round(float(cols.mean()) + 0.5, 2), round(float(rows.mean()) + 0.5, 2)] if count else None
     return {
@@ -166,7 +170,7 @@ def pixel_evidence(inspection: Inspection, panel: PanelImage, x: int, y: int) ->
     value = panel.signal[y, x]
     source_x, source_y = project(panel.matrix, np.array(x + 0.5), np.array(y + 0.5))
     scale = millimeter_scale(inspection.plane)
-    cell = next((item for item in cells_for(inspection.plane) if item.covers(x + 0.5, y + 0.5)), None)
+    cell = cell_at(inspection.plane, inspection.grid_adjustments, x + 0.5, y + 0.5)
     return {
         "x": x, "y": y, "cell": cell.id if cell else None,
         "source": [round(float(source_x), 3), round(float(source_y), 3)],

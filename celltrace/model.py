@@ -372,6 +372,7 @@ class Inspection:
     calibration: Calibration = field(default_factory=Calibration)
     display: ViewSettings = field(default_factory=ViewSettings)
     analysis: AnalysisSettings = field(default_factory=AnalysisSettings)
+    grid_adjustments: dict = field(default_factory=lambda: {"vertical": [], "horizontal": []})
     findings: list[Finding] = field(default_factory=list)
     issue: dict | None = None
 
@@ -424,6 +425,10 @@ class Inspection:
         state = choice(raw.get("state", "open"), "Inspection state", FLOW_STATES)
         if (state == "issued") != (issue is not None):
             raise Issue("Inspection state does not match its issued result.")
+        plane = Plane.from_dict(raw.get("plane", asdict(Plane())))
+        # Local import avoids a model -> grid -> geometry -> model cycle.
+        from .grid import parse_grid_adjustments
+        grid_adjustments = parse_grid_adjustments(raw.get("grid_adjustments"), plane)
         return cls(
             file_id(raw.get("id"), "Inspection ID"),
             text(raw.get("module"), "Module serial", 80),
@@ -437,10 +442,11 @@ class Inspection:
             captures,
             dict(active),
             placements,
-            Plane.from_dict(raw.get("plane", asdict(Plane()))),
+            plane,
             Calibration.from_dict(raw.get("calibration", {})),
             ViewSettings.from_dict(raw.get("display", {})),
             AnalysisSettings.from_dict(raw.get("analysis", {})),
+            grid_adjustments,
             findings,
             issue,
         )

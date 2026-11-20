@@ -103,7 +103,9 @@ def inspect_strings(cells: list[Cell], plane: Plane, map_data: IntensityMap) -> 
         })
         for cell, row in zip(run, readings):
             if row["relative"] is not None:
-                heat[cell.view][support[cell.view]] = row["relative"]
+                view = cell.view
+                owned = cell.interior_mask(view)
+                heat[view][owned & support[view]] = row["relative"]
     return StringMap(results, heat, np.isfinite(heat), {
         "groups": len(results), "groups_with_flags": sum(bool(row["flags"]) for row in results),
         "axis": plane.string_axis, "string_width": plane.string_size,

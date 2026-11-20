@@ -9,6 +9,7 @@ from .calibration import PanelImage
 from .engine import EL_LAYERS, MEASUREMENT_PLANES, Engine
 from .findings import finding_status
 from .geometry import Cell, plane_polygon
+from .grid import adjusted_seam_keys, seam_polylines
 from .images import (
     compact_thumbnail, continuous_palette, grayscale_preview, mixed_overlay,
     png_bytes, set_invalid_pattern,
@@ -154,24 +155,50 @@ def render_layer(inspection: Inspection, engine: Engine, role: str, kind: str, o
 def make_layer(inspection: Inspection, engine: Engine, role: str, kind: str, options: RenderOptions) -> bytes:
     image, context = render_base(inspection, engine, role, kind)
     if options.grid or kind == "grid" or options.highlight:
-        decorate_grid(image, context.cells, labels=options.labels or kind == "grid", selected=options.highlight)
+        decorate_grid(
+            image, context.cells, plane=inspection.plane, labels=options.labels or kind == "grid",
+            selected=options.highlight, adjustments=inspection.grid_adjustments,
+        )
     if options.findings:
         decorate_findings(image, inspection, context.capture.role)
     return png_bytes(image)
 
 
-def decorate_grid(image: Image.Image, cells: list[Cell], *, labels: bool, selected: str | None = None):
+def decorate_grid(image: Image.Image, cells: list[Cell], *, plane, labels: bool, selected: str | None = None,
+                  adjustments: dict | None = None):
     painter = ImageDraw.Draw(image, "RGBA")
     face = font(11)
+    calibrated = adjusted_boundary_set(adjustments)
     for cell in cells:
         x0, y0, x1, y1 = cell.bounds
-        painter.rectangle((x0, y0, x1 - 1, y1 - 1), outline=(108, 173, 171, 119))
+        # Only draw rectangle edges that a calibrated seam does not own; the
+        # piecewise seam line is the single shared boundary for those sides.
+        segments = []
+        if ("vertical", cell.col) not in calibrated:
+            segments.append((x0, y0, x0, y1 - 1))
+        if ("vertical", cell.col + 1) not in calibrated:
+            segments.append((x1 - 1, y0, x1 - 1, y1 - 1))
+        if ("horizontal", cell.row) not in calibrated:
+            segments.append((x0, y0, x1 - 1, y0))
+        if ("horizontal", cell.row + 1) not in calibrated:
+            segments.append((x0, y1 - 1, x1 - 1, y1 - 1))
+        for segment in segments:
+            painter.line(segment, fill=(108, 173, 171, 119), width=1)
         if cell.id == selected:
             ix0, iy0, ix1, iy1 = cell.interior
             painter.rectangle((x0, y0, x1 - 1, y1 - 1), outline=(253, 207, 107, 245), width=2)
             painter.rectangle((ix0, iy0, ix1 - 1, iy1 - 1), outline=(253, 207, 107, 130), width=1)
         if labels and x1 - x0 >= 38 and y1 - y0 >= 20:
             draw_tag(painter, (x0 + 4, y0 + 4), cell.id, (148, 233, 214), face)
+    # Calibrated seams are shared boundaries: draw the actual piecewise line so
+    # a wandering seam stays visible instead of looking like a straight edge.
+    for seam in seam_polylines(plane, adjustments):
+        points = [tuple(point) for point in seam["points"]]
+        painter.line(points, fill=(245, 196, 105, 235), width=2, joint="curve")
+
+
+def adjusted_boundary_set(adjustments: dict | None) -> set[tuple[str, int]]:
+    return adjusted_seam_keys(adjustments)
 
 
 def draw_tag(painter, pos, title, color, face=None):

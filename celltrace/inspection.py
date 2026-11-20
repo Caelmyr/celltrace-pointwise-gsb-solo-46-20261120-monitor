@@ -9,6 +9,7 @@ from .model import (
     AnalysisSettings, CAPTURE_ROLES, Calibration, Capture, Inspection, Issue, Placement, Plane,
     SENSOR_ROLES, ViewSettings, boolean, choice, file_id, integer, mapping, real, text, utcnow,
 )
+from .seam_review import apply_seam_adjustment, clear_seam_adjustment
 from .store import Store, new_id, summary
 
 
@@ -120,6 +121,20 @@ class Inspections:
             transform_for(item.plane, placement)
             item.placements[capture.id] = placement
             message, details = "image placement updated", {"capture": capture.id, **asdict(placement)}
+        elif operation == "grid-seam":
+            item, conflicts = apply_seam_adjustment(item, raw)
+            message, details = "grid seam calibrated", {
+                "axis": raw.get("axis"), "index": raw.get("index"),
+                "points": raw.get("points"), "ownership_reviews": len(conflicts),
+                "affected_findings": [entry["finding"] for entry in conflicts],
+            }
+            item = self.store.save(item, item.revision, message, details)
+            return item, conflicts
+        elif operation == "grid-seam-reset":
+            item = clear_seam_adjustment(item, raw)
+            message, details = "grid seam reset to regular grid", {
+                "axis": raw.get("axis"), "index": raw.get("index"),
+            }
         elif operation == "calibration":
             item.calibration = Calibration.from_dict(raw)
             details = check_calibration(item)

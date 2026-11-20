@@ -39,18 +39,19 @@ def capture_quality(panel: PanelImage, capture: Capture, cells: list[Cell],
     records = []
     for cell in cells:
         view = cell.view
-        support = panel.valid[view]
+        owned = cell.interior_mask(view)
+        support = panel.valid[view] & owned
         raster = panel.signal[view]
         counts = {
             "expected_pixels": cell.pixels,
             "usable_pixels": int(support.sum()),
-            "clipped_pixels": int(panel.clipped[view].sum()),
-            "reference_gap_pixels": int(panel.calibration_gap[view].sum()),
-            "outside_pixels": int((~panel.any_support[view]).sum()),
-            "near_floor_pixels": int(deep_floor[view].sum()),
+            "clipped_pixels": int((panel.clipped[view] & owned).sum()),
+            "reference_gap_pixels": int((panel.calibration_gap[view] & owned).sum()),
+            "outside_pixels": int((~panel.any_support[view] & owned).sum()),
+            "near_floor_pixels": int((deep_floor[view] & owned).sum()),
         }
         fraction = support.sum() / cell.pixels
-        grad = contrasts[view][applicable[view]]
+        grad = contrasts[view][applicable[view] & owned]
         flags = []
         if fraction < settings.usable_cell:
             flags.append("insufficient support")

@@ -5,6 +5,7 @@ import {
 } from "./ui.js";
 import {showCalibration, showPlacement, showPlacementReview} from "./captures.js";
 import {showFindingForm} from "./reviews.js";
+import {showSeamCalibration, seamConflictBanner} from "./seams.js";
 
 const LAYERS = [
   ["panel", "EL image"], ["support", "Support"], ["quality", "Quality"], ["intensity", "Cell levels"],
@@ -63,6 +64,7 @@ export function renderWorkbench(app, root) {
   ].map(([key, label]) => `<button type="button" class="compact" data-mode="${key}" aria-pressed="${ctx.mode === key}"
       ${key === "pair" && roles.length < 2 ? "disabled" : ""}>${label}</button>`).join("");
   root.innerHTML = `<div class="bench"><div class="section-stack">
+    ${ctx.seamConflicts?.length ? conflictSection(app, ctx.seamConflicts) : ""}
     <section class="viewer-shell" aria-label="Inspection image viewer">
       <div class="viewer-top">
         <div class="toolbar">${roleButtons}</div><div class="toolbar">
@@ -166,7 +168,10 @@ export function renderWorkbench(app, root) {
   $("#pack-images", root).onclick = () => cellExportDialog(app, displayRole);
   $("#edit-placement", root).onclick = () => showPlacement(app, item.captures[item.active[displayRole]]);
   $("#diagnose-placement", root).onclick = () => showPlacementReview(app, displayRole);
+  $("#calibrate-seam", root).onclick = () => showSeamCalibration(app, displayRole);
   $("#bench-calibration", root).onclick = () => showCalibration(app);
+  $("#goto-findings", root)?.addEventListener("click", () => app.showTab("findings"));
+  $("#dismiss-conflicts", root)?.addEventListener("click", () => app.dismissSeamConflicts());
   $("#measurement-settings", root)?.addEventListener("click", () => analysisDialog(app));
   configureTools(app, root, displayRole, redraw);
   const view = ctx.layer === "support" || ctx.layer === "panel" ? "quality" : ctx.layer;
@@ -179,6 +184,12 @@ function legend(layer) {
     `<span><i style="--color:${color}"></i>${label}</span>`).join("")}</span>`;
 }
 
+function conflictSection(app, conflicts) {
+  return seamConflictBanner(conflicts) +
+    `<div class="card-pad toolbar">${button("goto-findings", "Open Findings tab", "compact")}
+      ${button("dismiss-conflicts", "Dismiss reminder", "quiet")}</div>`;
+}
+
 function selectedCapture(app, role) {
   const selected = app.case.captures[app.case.active[role]];
   return `<section class="card"><div class="card-header"><h2>Selected capture</h2>${badge(ROLE[role], "neutral")}</div>
@@ -187,6 +198,7 @@ function selectedCapture(app, role) {
       ["Drive", selected.current_a == null ? "—" : `${selected.current_a} A`], ["Exposure", `${selected.exposure_ms} ms`],
     ])}<div class="toolbar">${button("edit-placement", "Corner placement")}
       ${button("diagnose-placement", "Check grid")}
+      ${button("calibrate-seam", "Calibrate seam")}
       ${button("bench-calibration", "References")}</div></div></section>`;
 }
 

@@ -72,8 +72,17 @@ def sample_strip(values: np.ndarray, support: np.ndarray, strip: Strip) -> tuple
     return signal, accepted
 
 
-def strip_cell_indices(cells: list[Cell], centers: np.ndarray, plane: Plane) -> list[str | None]:
+def strip_cell_indices(cells: list[Cell], centers: np.ndarray, plane: Plane,
+                       ownership: tuple[np.ndarray, np.ndarray] | None = None) -> list[str | None]:
     result = [None] * centers.shape[0]
+    if ownership is not None:
+        row_owner, col_owner = ownership
+        lookup = {(cell.row, cell.col): cell.id for cell in cells}
+        for index, (x, y) in enumerate(centers):
+            px = int(np.clip(np.floor(x), 0, plane.width - 1))
+            py = int(np.clip(np.floor(y), 0, plane.height - 1))
+            result[index] = lookup.get((int(row_owner[py, px]), int(col_owner[py, px])))
+        return result
     for cell in cells:
         x0, y0, x1, y1 = cell.bounds
         visible = (
@@ -85,12 +94,13 @@ def strip_cell_indices(cells: list[Cell], centers: np.ndarray, plane: Plane) -> 
     return result
 
 
-def analyze_transect(panel: PanelImage, plane: Plane, cells: list[Cell], transect: Transect) -> dict:
+def analyze_transect(panel: PanelImage, plane: Plane, cells: list[Cell], transect: Transect,
+                     ownership: tuple[np.ndarray, np.ndarray] | None = None) -> dict:
     strip = prepare_strip(transect, plane)
     values, support = sample_strip(panel.signal, panel.valid, strip)
     counts = support.sum(axis=1)
     dominant = counts >= max(1, (transect.width + 1) // 2)
-    across = strip_cell_indices(cells, strip.centers, plane)
+    across = strip_cell_indices(cells, strip.centers, plane, ownership)
     horizontal, vertical = strip.direction
     scale = millimeter_scale(plane)
     millimeters_per_pixel = hypot(horizontal * scale[0], vertical * scale[1]) if scale else None

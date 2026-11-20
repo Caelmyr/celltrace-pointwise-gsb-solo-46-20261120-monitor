@@ -5,7 +5,8 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from .engine import Engine
-from .geometry import Cell, cells_for
+from .geometry import Cell
+from .grid import cells_for_plane
 from .images import grayscale_preview, png_bytes
 from .model import Inspection, Issue, real, xy_list
 from .render import draw_tag, font
@@ -125,7 +126,7 @@ def draw_result(engine, inspection, window, fmt, mode, contrast, gamma, wipe, fr
     high, low, metadata = views(engine, inspection, window, contrast, gamma)
     if fmt == "data":
         return metadata
-    visible_cells = list(crossed_cells(cells_for(inspection.plane), window)) if grid else []
+    visible_cells = list(crossed_cells(cells_for_plane(inspection.plane, inspection.grid_adjustments), window)) if grid else []
     if mode == "side":
         output = side_by_side(high, low, metadata, visible_cells, window)
     elif mode == "checker":

@@ -5,6 +5,7 @@ from scipy import ndimage
 
 from .calibration import PanelImage
 from .geometry import Cell
+from .grid import calibration_objects, edge_arrays, round_edge, seam_positions
 from .model import Plane
 
 
@@ -101,21 +102,36 @@ def intervals(length: int, count: int) -> list[slice]:
     return spans
 
 
-def panel_placement_check(panel: PanelImage, plane: Plane, cells: list[Cell]) -> PlacementCheck:
+def panel_placement_check(panel: PanelImage, plane: Plane, cells: list[Cell],
+                          adjustments: dict | None = None) -> PlacementCheck:
     radius_x = max(4, min(22, int(0.14 * plane.width / plane.cols)))
     radius_y = max(4, min(22, int(0.14 * plane.height / plane.rows)))
     x_spans = intervals(plane.width, plane.cols)
     y_spans = intervals(plane.height, plane.rows)
-    nominal_x = {cell.bounds[0] for cell in cells if cell.col > 0}
-    nominal_y = {cell.bounds[1] for cell in cells if cell.row > 0}
-    vertical = [
-        local_separator(panel.signal.T, panel.valid.T, x, radius_x, span, "vertical")
-        for x in sorted(nominal_x) for span in y_spans
-    ]
-    horizontal = [
-        local_separator(panel.signal, panel.valid, y, radius_y, span, "horizontal")
-        for y in sorted(nominal_y) for span in x_spans
-    ]
+    x_edges, y_edges = edge_arrays(plane, adjustments)
+    objects = calibration_objects(adjustments)
+    vertical_seams = {seam.index: seam for seam in objects.get("vertical", [])}
+    horizontal_seams = {seam.index: seam for seam in objects.get("horizontal", [])}
+    # Each separator sample band uses the calibrated boundary position at the
+    # band's own row/column, so offset reporting follows the corrected seam.
+    vertical = []
+    for col in sorted({cell.col for cell in cells if cell.col > 0}):
+        for span in y_spans:
+            middle = (span.start + span.stop) // 2
+            if col in vertical_seams:
+                position = int(round_edge(seam_positions(vertical_seams[col], np.array([middle]))[0]))
+            else:
+                position = int(round_edge(x_edges[0, col]))
+            vertical.append(local_separator(panel.signal.T, panel.valid.T, position, radius_x, span, "vertical"))
+    horizontal = []
+    for row in sorted({cell.row for cell in cells if cell.row > 0}):
+        for span in x_spans:
+            middle = (span.start + span.stop) // 2
+            if row in horizontal_seams:
+                position = int(round_edge(seam_positions(horizontal_seams[row], np.array([middle]))[0]))
+            else:
+                position = int(round_edge(y_edges[0, row]))
+            horizontal.append(local_separator(panel.signal, panel.valid, position, radius_y, span, "horizontal"))
     offsets = [item["offset"] for item in vertical + horizontal if item["offset"] is not None]
     clipping = corner_samples(panel, plane)
     report = {
@@ -177,6 +193,8 @@ def paint_placement_diagnostics(panel: PanelImage, display, result: PlacementChe
 
 
 def paint_separator(draw, row, face):
+    from .render import draw_tag
+
     expected = row["expected"]
     measured = row["detected"]
     start, end = row["start"], row["end"]
@@ -226,8 +244,8 @@ def rectification_edges(panel: PanelImage, plane: Plane) -> list[dict]:
     return output
 
 
-def placement_report(ctx, plane, revision):
-    result = panel_placement_check(ctx.panel, plane, ctx.cells)
+def placement_report(ctx, plane, revision, adjustments=None):
+    result = panel_placement_check(ctx.panel, plane, ctx.cells, adjustments)
     render_ready = {
         "revision": revision,
         "capture": ctx.capture.id,

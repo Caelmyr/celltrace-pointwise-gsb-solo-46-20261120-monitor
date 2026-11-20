@@ -272,3 +272,10 @@ form > .small-copy, form > .warning { margin-top: 9px; }
 #archive-info, #region-result, #line-result { margin-top: 8px; }
 #layer-metrics .warning { margin-top: 7px; }
 details > summary { color: var(--accent); cursor: pointer; font-size: 12px; }
+
+.conflict-panel { border: 1px solid #7a5a33; background: #33281d; border-radius: 8px; padding: 12px; margin: 10px 0; }
+.conflict-panel h3 { color: #ffce98; margin: 0 0 6px; font-size: 14px; }
+.warning-banner { border-color: #7a5a33; }
+.warning-banner strong { color: #ffce98; }
+#seam-editor .table-wrap { max-height: 220px; overflow: auto; }
+#seam-canvas { cursor: crosshair; }

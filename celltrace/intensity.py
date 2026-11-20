@@ -36,9 +36,10 @@ def cell_intensity(panel: PanelImage, cells: list[Cell], settings: AnalysisSetti
     comparable = np.zeros(panel.signal.shape, dtype=bool)
     for cell in cells:
         view = cell.view
-        usable = panel.valid[view]
-        fraction = float(usable.sum() / cell.pixels)
-        stats = distribution(panel.signal[view][usable])
+        owned = cell.interior_mask(view)
+        valid = panel.valid[view] & owned
+        fraction = float(valid.sum() / cell.pixels)
+        stats = distribution(panel.signal[view][valid])
         trust = fraction >= settings.usable_cell
         median = stats["median"] if trust else None
         high_band = stats["p90"] if trust else None
@@ -55,8 +56,8 @@ def cell_intensity(panel: PanelImage, cells: list[Cell], settings: AnalysisSetti
             "active_pixels": stats["count"],
         }
         if trust and median is not None:
-            heat[view][usable] = median
-            comparable[view] = usable
+            heat[view][valid] = median
+            comparable[view] = valid
         records.append(row)
     qualified = [median for median in medians.values() if median is not None]
     median = float(np.median(qualified)) if qualified else None
@@ -80,6 +81,10 @@ def dark_area_map(panel: PanelImage, plane: Plane, cells: list[Cell], settings: 
             continue
         view = cell.view
         valid = panel.valid[view]
+        # Restrict analysis to the exact owned pixels where a calibrated seam
+        # makes the box include parts of neighbouring cells.
+        interior_mask = cell.interior_mask(view)
+        valid = valid & interior_mask
         orig = panel.signal[view]
         filtered, weights = supported_blur(orig, valid, 0.75)
         testable = valid & (weights >= 0.73)
@@ -105,7 +110,7 @@ def dark_area_map(panel: PanelImage, plane: Plane, cells: list[Cell], settings: 
                 "center": [round(x0 + xs.start + float(xx.mean()) + 0.5, 2),
                            round(y0 + ys.start + float(yy.mean()) + 0.5, 2)],
                 "pixels": int(counts[marker]),
-                "cell_fraction": round(float(counts[marker] / valid.sum()), 6),
+                "cell_fraction": round(float(counts[marker] / max(1, valid.sum())), 6),
                 "area_mm2": round(float(counts[marker] * scale[0] * scale[1]), 3) if scale else None,
                 "mean_signal": round(float(np.mean(intensity)), 5),
                 "depth": round(1 - float(np.median(intensity)) / anchor, 4),

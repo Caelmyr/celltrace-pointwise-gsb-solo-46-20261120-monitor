@@ -39,13 +39,14 @@ def crack_evidence(panel: PanelImage, plane: Plane, cells: list[Cell], settings:
     scale = millimeter_scale(plane)
     for cell in cells:
         view = cell.view
+        owned = cell.interior_mask(view)
         image = panel.signal[view]
-        valid = panel.valid[view]
-        exclusion = cell_exclusions(valid, settings.ignore_margin, dark_areas[view])
-        bar = busbar_bands(cell, settings)
-        busbars[view] = bar
+        valid = panel.valid[view] & owned
+        exclusion = cell_exclusions(valid, settings.ignore_margin, dark_areas[view] & owned)
+        bar = busbar_bands(cell, settings) & owned
+        busbars[view] |= bar
         exclusion |= bar
-        exclusions[view] = exclusion
+        exclusions[view] |= exclusion
         response = valley_response(image, valid)
         threshold = (response >= settings.crack_contrast) & ~exclusion
         components, count = ndimage.label(threshold, structure=CONNECT)

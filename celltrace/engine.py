@@ -11,6 +11,7 @@ from .calibration import (
 from .cracks import CrackMap, crack_evidence
 from .findings import get_finding, measure_polygon, pixel_evidence
 from .geometry import Cell, SamplingMap, cells_for, default_placement
+from .grid import cells_for_plane, pixel_ownership
 from .images import decode_source, verify_capture
 from .intensity import DarkMap, IntensityMap, cell_intensity, dark_area_map
 from .model import Capture, Inspection, Issue, SENSOR_ROLES, choice, integer, parse_cell, xy_list
@@ -23,7 +24,11 @@ from .transects import Transect, analyze_transect
 
 MEASUREMENT_PLANES = frozenset(("quality", "calibration", "intensity", "dark", "cracks", "response", "strings"))
 EL_LAYERS = frozenset(("panel", "support", "grid")) | MEASUREMENT_PLANES
-MODEL_REVISION = "celltrace-plane-v1"
+MODEL_REVISION = "celltrace-plane-v2"
+
+
+def grid_identity(inspection: Inspection) -> tuple:
+    return (MODEL_REVISION, data_digest(inspection.grid_adjustments))
 
 
 @dataclass(frozen=True)
@@ -80,9 +85,14 @@ class Engine:
     def panel_context(self, inspection: Inspection, role: str) -> PanelContext:
         choice(role, "EL capture role", SENSOR_ROLES)
         capture = inspection.selected(role)
+        # The rectified pixel panel depends only on the source, placement and
+        # calibration, not on seam corrections; cell geometry is attached fresh.
         key = panel_identity(inspection, capture)
         panel = self.panels.get(key, lambda: self.calculate_panel(inspection, capture))
-        return PanelContext(capture, panel, cells_for(inspection.plane), key)
+        return PanelContext(capture, panel, cells_for_plane(inspection.plane, inspection.grid_adjustments), key)
+
+    def panel_identity_key(self, inspection: Inspection, capture: Capture) -> tuple:
+        return panel_identity(inspection, capture) + grid_identity(inspection)
 
     def calculate_panel(self, inspection: Inspection, capture: Capture) -> PanelImage:
         source = self.read_source(capture)
@@ -104,6 +114,7 @@ class Engine:
         return (
             kind, context.pixel_key, low.pixel_key if low else None,
             data_digest(asdict(inspection.plane)), data_digest(asdict(inspection.analysis)),
+            grid_identity(inspection),
         )
 
     def intensity(self, inspection: Inspection, context: PanelContext):
@@ -225,17 +236,18 @@ class Engine:
     def transect(self, inspection: Inspection, role: str, raw: dict):
         transect = Transect.from_dict(raw)
         context = self.panel_context(inspection, role)
-        report = analyze_transect(context.panel, inspection.plane, context.cells, transect)
+        ownership = pixel_ownership(inspection.plane, inspection.grid_adjustments)
+        report = analyze_transect(context.panel, inspection.plane, context.cells, transect, ownership)
         return {"capture": context.capture.id, "role": role, "revision": inspection.revision, **report}
 
     def view_key(self, inspection: Inspection, role: str, kind: str, grid: bool, labels: bool):
         source = inspection.selected("high" if kind == "response" else role)
         low_source = inspection.selected("low") if kind == "response" else None
         return (
-            "render", kind, panel_identity(inspection, source),
-            panel_identity(inspection, low_source) if low_source else None,
+            "render", kind, self.panel_identity_key(inspection, source),
+            self.panel_identity_key(inspection, low_source) if low_source else None,
             data_digest(asdict(inspection.plane)), data_digest(asdict(inspection.analysis)),
-            data_digest(asdict(inspection.display)), grid, labels,
+            data_digest(asdict(inspection.display)), grid, labels, grid_identity(inspection),
         )
 
 

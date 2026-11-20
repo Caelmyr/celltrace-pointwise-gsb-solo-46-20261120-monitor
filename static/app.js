@@ -18,7 +18,7 @@ class CellTraceApp {
     this.inspections = [];
     this.case = null;
     this.workspace = {layer: "panel", role: "high", grid: true, labels: true, findings: true, mode: "probe", zoom: 100,
-      points: [], cell: "", probe: null, measure: null};
+      points: [], cell: "", probe: null, measure: null, seamConflicts: []};
     this.tab = "bench";
     this.searchTimer = null;
     this.toastTimer = null;
@@ -123,8 +123,16 @@ class CellTraceApp {
 
   async patch(operation, body, message) {
     const item = await request(this.url(`/${operation}`), "PATCH", {...body, revision: this.case.revision});
+    if (operation === "grid-seam" && Array.isArray(item.seam_conflicts)) {
+      this.workspace.seamConflicts = item.seam_conflicts;
+    }
     await this.update(item, message);
     return item;
+  }
+
+  dismissSeamConflicts() {
+    this.workspace.seamConflicts = [];
+    this.render();
   }
 
   notify(message, isError = false) {

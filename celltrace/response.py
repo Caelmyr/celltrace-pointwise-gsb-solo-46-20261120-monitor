@@ -54,14 +54,15 @@ def response_map(high: PanelImage, low: PanelImage, high_capture: Capture, low_c
     references = []
     for cell in cells:
         view = cell.view
-        count_common = int(common[view].sum())
-        count_stable = int(stable[view].sum())
+        owned = cell.interior_mask(view)
+        count_common = int((common[view] & owned).sum())
+        count_stable = int((stable[view] & owned).sum())
         qualified = count_stable / cell.pixels >= settings.usable_cell
-        stats = distribution(current_ratio[view][stable[view]])
+        stats = distribution(current_ratio[view][stable[view] & owned])
         median_value = stats["median"] if qualified else None
         if median_value is not None:
             references.append(median_value)
-            eligible[view] = stable[view]
+            eligible[view][stable[view] & owned] = True
         rows.append({
             "cell": cell.id,
             "string": cell.string,
@@ -87,7 +88,7 @@ def response_map(high: PanelImage, low: PanelImage, high_capture: Capture, low_c
             continue
         qualified_cells += 1
         relative_value = float(row["ratio"] / reference)
-        count_weak = int(weak[cell.view].sum())
+        count_weak = int((weak[cell.view] & cell.interior_mask(cell.view)).sum())
         is_weak = relative_value < settings.current_ratio
         if is_weak:
             weak_cells += 1
