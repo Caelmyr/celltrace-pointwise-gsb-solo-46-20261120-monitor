@@ -15,7 +15,7 @@ from .tables import csv_data
 
 REPORT_SCHEMA = "celltrace-issued-report-v1"
 DISPOSITIONS = frozenset(("release", "hold", "reinspect"))
-REPORT_KINDS = ("quality", "calibration", "intensity", "dark", "cracks", "strings")
+REPORT_KINDS = ("quality", "calibration", "intensity", "dark", "cracks", "strings", "edges")
 
 
 def disposition_check(inspection, findings: list[dict]) -> tuple[list[str], list[str]]:
@@ -42,6 +42,8 @@ def summarize_for_issue(inspection, engine: Engine, events: list[dict]) -> dict:
     sections = {}
     if "high" in inspection.active:
         for kind in REPORT_KINDS:
+            if kind == "edges" and not inspection.edges.enabled:
+                continue
             result = engine.table(inspection, "high", kind)
             sections[kind] = {"summary": result["summary"], "records": len(result["rows"])}
         if sections["intensity"]["summary"]["eligible_cells"] == 0:
@@ -96,6 +98,8 @@ def report_documents(inspection, engine: Engine, preview: dict) -> tuple[dict, d
         "dark": render_layer(inspection, engine, "high", "dark", RenderOptions(True, False)),
         "cracks": render_layer(inspection, engine, "high", "cracks", RenderOptions(True, False)),
     }
+    if "edges" in preview["sections"]:
+        media["edges"] = render_layer(inspection, engine, "high", "edges", RenderOptions(True, False))
     if "response" in preview["sections"]:
         media["response"] = render_layer(inspection, engine, "high", "response", RenderOptions(True, False))
     tables = {}
@@ -245,6 +249,7 @@ def image_title(kind):
         "panel": "Grid with reviewed findings", "quality": "Usable coverage and image-quality flags",
         "dark": "Connected dark evidence", "cracks": "Thin dark-line candidates",
         "response": "Paired-current relative response",
+        "edges": "Cut edge setback and missing edge segments",
     }[kind]
 
 
@@ -259,6 +264,9 @@ def report_highlights(sections):
         ("cracks", "trace_length_mm", "Candidate trace length in mm"),
         ("strings", "groups_with_flags", "Strings with review flags"),
         ("response", "weak_cells", "Cells with low relative response"),
+        ("edges", "cell_edges", "Reviewed cut edges"),
+        ("edges", "deactivated_pixels", "Cut edge deactivated pixels"),
+        ("edges", "missing_positions", "Cut edge positions needing recapture"),
     )
     return [
         (label, sections[kind]["summary"][metric])

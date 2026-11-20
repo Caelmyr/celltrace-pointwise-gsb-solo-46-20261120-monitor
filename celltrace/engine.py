@@ -9,6 +9,7 @@ from .calibration import (
     panel_calibration_report, project_panel,
 )
 from .cracks import CrackMap, crack_evidence
+from .edge_inspection import EdgeMap, cut_edge_map
 from .findings import get_finding, measure_polygon, pixel_evidence
 from .geometry import Cell, SamplingMap, cells_for, default_placement
 from .images import decode_source, verify_capture
@@ -21,7 +22,9 @@ from .strings import StringMap, inspect_strings
 from .transects import Transect, analyze_transect
 
 
-MEASUREMENT_PLANES = frozenset(("quality", "calibration", "intensity", "dark", "cracks", "response", "strings"))
+MEASUREMENT_PLANES = frozenset(
+    ("quality", "calibration", "intensity", "dark", "cracks", "response", "strings", "edges")
+)
 EL_LAYERS = frozenset(("panel", "support", "grid")) | MEASUREMENT_PLANES
 MODEL_REVISION = "celltrace-plane-v1"
 
@@ -37,7 +40,7 @@ class PanelContext:
 @dataclass(frozen=True)
 class PlaneAnalysis:
     context: PanelContext
-    data: QualityMap | DarkMap | IntensityMap | CrackMap | CurrentResponse | StringMap | dict
+    data: QualityMap | DarkMap | IntensityMap | CrackMap | CurrentResponse | StringMap | EdgeMap | dict
 
 
 def panel_identity(inspection: Inspection, capture: Capture) -> tuple:
@@ -104,6 +107,7 @@ class Engine:
         return (
             kind, context.pixel_key, low.pixel_key if low else None,
             data_digest(asdict(inspection.plane)), data_digest(asdict(inspection.analysis)),
+            data_digest(asdict(inspection.edges)),
         )
 
     def intensity(self, inspection: Inspection, context: PanelContext):
@@ -130,6 +134,16 @@ class Engine:
         )
         return PlaneAnalysis(high, result)
 
+    def edges(self, inspection: Inspection, context: PanelContext):
+        identity = self.identity(inspection, "edges", context)
+        return self.measurements.get(
+            identity,
+            lambda: cut_edge_map(
+                context.panel, inspection.plane, context.cells, inspection.edges,
+                self.intensity(inspection, context), inspection.analysis.dark_fraction,
+            ),
+        )
+
     def measure(self, inspection: Inspection, role: str, kind: str) -> PlaneAnalysis:
         choice(kind, "Measurement", MEASUREMENT_PLANES)
         if kind == "response":
@@ -139,6 +153,10 @@ class Engine:
             return PlaneAnalysis(context, self.intensity(inspection, context))
         if kind == "dark":
             return PlaneAnalysis(context, self.dark(inspection, context))
+        if kind == "edges":
+            if not inspection.edges.enabled:
+                raise Issue("Enable cut edge inspection in the edge settings first.", 409)
+            return PlaneAnalysis(context, self.edges(inspection, context))
         identity = self.identity(inspection, kind, context)
         result = self.measurements.get(identity, lambda: self.calculate(inspection, kind, context))
         return PlaneAnalysis(context, result)
@@ -191,7 +209,7 @@ class Engine:
         intensity = self.intensity(inspection, context).records[row * inspection.plane.cols + col]
         dark = self.dark(inspection, context)
         cracks = self.measure(inspection, role, "cracks").data
-        return {
+        details = {
             "capture": context.capture.id,
             "revision": inspection.revision,
             "cell": cell.id,
@@ -203,6 +221,12 @@ class Engine:
             "cracks": [item for item in cracks.records if item["cell"] == cell.id],
             "findings": [item.id for item in inspection.findings if item.cell == cell.id],
         }
+        if inspection.edges.enabled:
+            edges = self.edges(inspection, context)
+            details["edges"] = [item for item in edges.records if item["cell"] == cell.id]
+        else:
+            details["edges"] = []
+        return details
 
     def polygon(self, inspection: Inspection, role: str, points, finding_id: str | None = None):
         if finding_id:

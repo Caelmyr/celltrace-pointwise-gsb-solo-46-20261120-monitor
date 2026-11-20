@@ -105,6 +105,29 @@ def color_edges(image: Image.Image, mask: np.ndarray, color: tuple, alpha=0.82) 
     return mixed_overlay(image, edge, color, alpha)
 
 
+EDGE_BAND = (251, 150, 75)
+EDGE_SETBACK = (244, 96, 108)
+EDGE_MISSING = (120, 150, 235)
+EDGE_BOUNDARY = (123, 223, 188)
+
+
+def edge_rgb(panel: PanelImage, display: ViewSettings, data) -> Image.Image:
+    image = panel_preview(panel, display)
+    image = mixed_overlay(image, data.deactivation, EDGE_BAND, 0.42)
+    setback_mask = np.isfinite(data.setback) & (data.setback > 0)
+    setback_line = ndimage.binary_dilation(setback_mask, iterations=1)
+    image = mixed_overlay(image, setback_line, EDGE_SETBACK, 0.78)
+    image = mixed_overlay(image, data.missing, EDGE_MISSING, 0.6)
+    painter = ImageDraw.Draw(image, "RGBA")
+    if data.axis == "vertical":
+        painter.line([(data.boundary, 0), (data.boundary, panel.signal.shape[0] - 1)],
+                     fill=(*EDGE_BOUNDARY, 210), width=1)
+    else:
+        painter.line([(0, data.boundary), (panel.signal.shape[1] - 1, data.boundary)],
+                     fill=(*EDGE_BOUNDARY, 210), width=1)
+    return image
+
+
 def render_base(inspection: Inspection, engine: Engine, role: str, kind: str):
     context = engine.panel_context(inspection, role) if kind != "response" else None
     if kind in MEASUREMENT_PLANES:
@@ -131,6 +154,8 @@ def render_base(inspection: Inspection, engine: Engine, role: str, kind: str):
         image = mixed_overlay(image, data.evidence, (239, 103, 133), 0.52)
         image = mixed_overlay(image, ndimage.binary_dilation(data.skeleton) & ~data.busbars, (255, 122, 151), 0.92)
         draw_endpoints(image, data.records)
+    elif kind == "edges":
+        image = edge_rgb(panel, display, data)
     elif kind == "response":
         image = scalar_rgb(data.relative, data.eligible, (0.34, 1.32), DIVERGING)
         image = color_edges(image, data.weak, (247, 204, 106), 0.63)

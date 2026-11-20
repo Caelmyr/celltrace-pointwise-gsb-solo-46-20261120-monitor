@@ -27,6 +27,7 @@ class DemoCapture:
 class Scene:
     high: np.ndarray
     low: np.ndarray
+    support: dict | None = None
 
 
 def demo_plane() -> Plane:
@@ -34,6 +35,35 @@ def demo_plane() -> Plane:
         width=840, height=540, rows=4, cols=6, inset=0.07, string_axis="columns", string_size=2,
         physical_width=1722, physical_height=1134,
     )
+
+
+def seam_x(plane: Plane) -> int:
+    return plane.width // 2
+
+
+def cut_edge_features(field: np.ndarray, plane: Plane) -> dict:
+    """Inject half-cut seam setbacks, a detached dark spot and recapture gaps."""
+    seam = seam_x(plane)
+    cell_h = plane.height // plane.rows
+    features = {"seam": seam, "bands": [], "spot": None, "occlusion": None}
+    # Continuous deactivated band on the right face of the left half, spanning rows 0-1.
+    band_top, band_bottom = 8, int(cell_h * 1.62)
+    depth = 13
+    field[band_top:band_bottom, seam - depth:seam] *= 0.42
+    features["bands"].append((band_top, band_bottom, depth, "right"))
+    # Shallow partial setback on the left face of the right half, row 2 only.
+    row2 = cell_h * 2
+    shallow_top, shallow_bottom = row2 + 14, row2 + int(cell_h * 0.78)
+    shallow_depth = 7
+    field[shallow_top:shallow_bottom, seam:seam + shallow_depth] *= 0.52
+    features["bands"].append((shallow_top, shallow_bottom, shallow_depth, "left"))
+    # Detached dark spot connected to nothing at the seam; must not inflate setback.
+    spot_cx, spot_cy = seam - 30, cell_h * 3 + cell_h // 2
+    yy, xx = np.ogrid[:plane.height, :plane.width]
+    spot = ((xx - spot_cx) / 9.0) ** 2 + ((yy - spot_cy) / 12.0) ** 2 <= 1
+    field[spot] *= 0.5
+    features["spot"] = (int(spot_cx), int(spot_cy))
+    return features
 
 
 def panel_scene(plane: Plane, rng, variant: str) -> Scene:
@@ -61,12 +91,28 @@ def panel_scene(plane: Plane, rng, variant: str) -> Scene:
     field[contacts] *= 1.21
     soft_edge = np.exp(-7 * np.minimum.reduce((u, 1 - u, v, 1 - v))) * 0.1
     field[active] *= 1 - soft_edge[active]
+    edge_features = cut_edge_features(field, plane)
     dark_shapes(field, column, row, variant)
     low = low_current(field, column, row, active, variant)
     noise = rng.normal(0, 0.005, field.shape)
     field[active] += noise[active]
     low[active] += noise[active] * 0.51
-    return Scene(field, low)
+    scene = Scene(field, low)
+    scene.support = recapture_gap(scene, plane, edge_features, variant)
+    return scene
+
+
+def recapture_gap(scene: Scene, plane: Plane, features: dict, variant: str) -> dict:
+    """Mark a seam segment as unsupported capture (masked film edge / out of frame)."""
+    seam = features["seam"]
+    cell_h = plane.height // plane.rows
+    if variant == "standard":
+        gap = {"axis": "vertical", "x0": seam - 3, "x1": seam + 4,
+               "y0": cell_h * 2 + int(cell_h * 0.55), "y1": cell_h * 2 + int(cell_h * 0.86)}
+    else:
+        gap = {"axis": "vertical", "x0": seam - 5, "x1": seam + 6,
+               "y0": int(cell_h * 0.30), "y1": int(cell_h * 0.72)}
+    return {"gap": gap}
 
 
 def dark_shapes(field: np.ndarray, columns: np.ndarray, rows: np.ndarray, variant: str):
@@ -120,7 +166,7 @@ def low_current(high, columns, rows, active, variant) -> np.ndarray:
 
 
 def project_to_camera(scene: np.ndarray, frame_shape: tuple[int, int], corners: tuple,
-                      inverse_x: bool) -> np.ndarray:
+                      inverse_x: bool, occlusion: np.ndarray | None = None) -> np.ndarray:
     h, w = scene.shape
     camera = np.asarray(corners, dtype=np.float64)
     module = np.array(((0, 0), (w, 0), (w, h), (0, h)), dtype=np.float64)
@@ -132,7 +178,36 @@ def project_to_camera(scene: np.ndarray, frame_shape: tuple[int, int], corners: 
     sensor = ndimage.map_coordinates(
         scene, (v - 0.5, u - 0.5), order=1, mode="constant", cval=0.004, prefilter=False,
     )
+    if occlusion is not None:
+        masked = ndimage.map_coordinates(
+            occlusion.astype(np.float32), (v - 0.5, u - 0.5),
+            order=1, mode="constant", cval=0.0, prefilter=False,
+        )
+        sensor = np.where(masked > 0.5, np.nan, sensor)
     return sensor.astype(np.float32)
+
+
+def occlusion_mask(plane: Plane, gap: dict) -> np.ndarray:
+    mask = np.zeros((plane.height, plane.width), dtype=np.uint8)
+    mask[gap["y0"]:gap["y1"], gap["x0"]:gap["x1"]] = 1
+    return mask
+
+
+def project_mask(mask: np.ndarray, frame_shape: tuple[int, int], corners: tuple,
+                 inverse_x: bool) -> np.ndarray:
+    h, w = mask.shape
+    camera = np.asarray(corners, dtype=np.float64)
+    module = np.array(((0, 0), (w, 0), (w, h), (0, h)), dtype=np.float64)
+    if inverse_x:
+        module = module[[1, 0, 3, 2]]
+    matrix = homography(camera, module)
+    yi, xi = np.ogrid[0.5:frame_shape[0]:1.0, 0.5:frame_shape[1]:1.0]
+    u, v = project(matrix, xi, yi)
+    mapped = ndimage.map_coordinates(
+        mask.astype(np.float32), (v - 0.5, u - 0.5),
+        order=1, mode="constant", cval=0.0, prefilter=False,
+    )
+    return mapped > 0.5
 
 
 def sensor_components(shape: tuple[int, int], rng) -> tuple[np.ndarray, np.ndarray]:
@@ -151,7 +226,7 @@ def sensor_components(shape: tuple[int, int], rng) -> tuple[np.ndarray, np.ndarr
 
 
 def synthetic_bytes(image: np.ndarray) -> bytes:
-    pixels = np.rint(np.clip(image, 0, 1) * 65535).astype(np.uint16)
+    pixels = np.rint(np.clip(np.nan_to_num(image, nan=0.0), 0, 1) * 65535).astype(np.uint16)
     return png_bytes(Image.fromarray(pixels))
 
 
@@ -166,13 +241,19 @@ def make_demo(variant: str = "standard") -> tuple[Plane, list[DemoCapture]]:
     if variant == "stress":
         low_corners = ((-37, 45), (920, 62), (936, 538), (-26, 560))
     high = project_to_camera(scene.high, frame_shape, high_corners, False)
-    low = project_to_camera(scene.low, frame_shape, low_corners, True)
+    gap = scene.support["gap"] if scene.support else None
+    low_occlusion = occlusion_mask(plane, gap) if gap else None
+    low = project_to_camera(scene.low, frame_shape, low_corners, True, low_occlusion)
     dark, flat = sensor_components(frame_shape, rng)
+    if low_occlusion is not None:
+        camera_mask = project_mask(low_occlusion, frame_shape, low_corners, True)
+        flat = np.where(camera_mask, 0.0, flat)
     gain = (flat - dark) / 0.46
     y, x = np.ogrid[:frame_shape[0], :frame_shape[1]]
     hotspot = np.exp(-(((x - 800) / 36) ** 2 + ((y - 116) / 28) ** 2)) * 0.84
     high = high * gain + dark + hotspot
-    low = low * gain + dark + rng.normal(0, 0.002, low.shape).astype(np.float32)
+    low_signal = low * gain + dark + rng.normal(0, 0.002, low.shape).astype(np.float32)
+    low = np.where(np.isnan(low), np.nan, low_signal)
     return plane, [
         DemoCapture("high", f"SYN-{variant}-high.png", synthetic_bytes(high), high_corners,
                     "identity", 100, 8.5),

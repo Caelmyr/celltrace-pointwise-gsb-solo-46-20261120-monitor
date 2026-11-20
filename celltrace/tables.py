@@ -29,6 +29,12 @@ COLUMNS = {
     "strings": (
         "string", "cells", "coverage", "median_relative", "p90_p10_span", "largest_step", "low_runs", "flags", "readings",
     ),
+    "edges": (
+        "cell", "face", "axis", "status", "bezel_px", "edge_length_px", "edge_length_mm",
+        "mean_setback_px", "max_setback_px", "mean_setback_mm", "max_setback_mm",
+        "deactivated_pixels", "deactivated_area_mm2", "measured_positions", "missing_positions",
+        "missing_fraction", "missing_segments", "edge_components",
+    ),
     "transect": ("index", "x", "y", "distance", "distance_mm", "cell", "usable", "support", "signal", "spread"),
     "lot": ("module", "lot", "state", "measurement", "median", "usable_cells", "total_cells", "crack_count", "dark_count"),
     "lot-cells": (

@@ -6,8 +6,9 @@ from .findings import get_finding, list_findings, make_finding
 from .geometry import default_placement, transform_for
 from .images import SensorImage, decode_source, safe_name
 from .model import (
-    AnalysisSettings, CAPTURE_ROLES, Calibration, Capture, Inspection, Issue, Placement, Plane,
-    SENSOR_ROLES, ViewSettings, boolean, choice, file_id, integer, mapping, real, text, utcnow,
+    AnalysisSettings, CAPTURE_ROLES, Calibration, Capture, EdgeSettings, Inspection, Issue,
+    Placement, Plane, SENSOR_ROLES, ViewSettings, boolean, choice, file_id, integer, mapping,
+    real, text, utcnow,
 )
 from .store import Store, new_id, summary
 
@@ -79,6 +80,10 @@ class Inspections:
         item = new_inspection(module, "DEMO-EL04", "Training", DEMO_NOTICE)
         item.plane = plane
         item.analysis = replace(item.analysis, busbars=(0.28, 0.72))
+        item.edges = replace(
+            item.edges, axis="vertical", boundary=0.5, left_face=True, right_face=True,
+            seam_gap_px=0, edge_footprint=6, max_setback_px=24,
+        )
         for frame in images:
             source = decode_source(frame.content)
             capture = capture_metadata(frame.role, frame.name, source, {
@@ -130,6 +135,9 @@ class Inspections:
         elif operation == "analysis":
             item.analysis = AnalysisSettings.from_dict(raw)
             message, details = "measurement thresholds updated", asdict(item.analysis)
+        elif operation == "edges":
+            item.edges = EdgeSettings.from_dict(raw)
+            message, details = "cut edge settings updated", asdict(item.edges)
         elif operation == "selection":
             capture = item.capture(raw.get("capture"))
             item.active[capture.role] = capture.id

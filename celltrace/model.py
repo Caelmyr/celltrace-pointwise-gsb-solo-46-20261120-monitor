@@ -27,6 +27,8 @@ FINDING_STATES = frozenset(("open", "hold", "cleared", "confirmed"))
 FINDING_CATEGORIES = frozenset(("dark", "crack", "suspect", "capture", "general"))
 ORIENTATIONS = frozenset(("identity", "rotate180", "mirror-x", "mirror-y"))
 STRING_AXES = frozenset(("columns", "rows"))
+EDGE_AXES = frozenset(("vertical", "horizontal"))
+EDGE_FACES = frozenset(("left", "right", "top", "bottom"))
 MAX_SOURCE_PIXELS = 8_000_000
 MAX_PLANE_PIXELS = 1_500_000
 MAX_UPLOAD_BYTES = 22 * 1024 * 1024
@@ -320,6 +322,52 @@ class AnalysisSettings:
 
 
 @dataclass(frozen=True)
+class EdgeSettings:
+    enabled: bool = True
+    axis: str = "vertical"
+    boundary: float = 0.5
+    left_face: bool = True
+    right_face: bool = True
+    seam_gap_px: int = 0
+    edge_footprint: int = 6
+    max_setback_px: int = 24
+    merge_gap_px: int = 3
+
+    @classmethod
+    def from_dict(cls, raw: dict):
+        raw = mapping(raw, "Cut edge settings")
+        axis = choice(raw.get("axis", "vertical"), "Cut edge direction", EDGE_AXES)
+        boundary = real(raw.get("boundary", 0.5), "Cut edge boundary fraction", 0.02, 0.98)
+        if axis == "vertical":
+            first_face = boolean(raw.get("left_face", True), "Cut edge left face")
+            second_face = boolean(raw.get("right_face", True), "Cut edge right face")
+        else:
+            # Stored records use left_face/right_face; forms may submit top_face/bottom_face.
+            first_face = boolean(raw.get("top_face", raw.get("left_face", True)), "Cut edge top face")
+            second_face = boolean(raw.get("bottom_face", raw.get("right_face", True)), "Cut edge bottom face")
+        if not (first_face or second_face):
+            raise Issue("Select at least one cut edge face to inspect.")
+        return cls(
+            boolean(raw.get("enabled", True), "Cut edge inspection flag"),
+            axis,
+            boundary,
+            first_face,
+            second_face,
+            integer(raw.get("seam_gap_px", 0), "Seam clearance", 0, 12),
+            integer(raw.get("edge_footprint", 6), "Minimum edge footprint", 2, 120),
+            integer(raw.get("max_setback_px", 24), "Maximum edge setback", 4, 96),
+            integer(raw.get("merge_gap_px", 3), "Missing segment merge gap", 0, 24),
+        )
+
+    def face_names(self) -> tuple[str, ...]:
+        if self.axis == "vertical":
+            names = (("left",) if self.left_face else ()) + (("right",) if self.right_face else ())
+        else:
+            names = (("top",) if self.left_face else ()) + (("bottom",) if self.right_face else ())
+        return names
+
+
+@dataclass(frozen=True)
 class Finding:
     id: str
     title: str
@@ -372,6 +420,7 @@ class Inspection:
     calibration: Calibration = field(default_factory=Calibration)
     display: ViewSettings = field(default_factory=ViewSettings)
     analysis: AnalysisSettings = field(default_factory=AnalysisSettings)
+    edges: EdgeSettings = field(default_factory=EdgeSettings)
     findings: list[Finding] = field(default_factory=list)
     issue: dict | None = None
 
@@ -441,6 +490,7 @@ class Inspection:
             Calibration.from_dict(raw.get("calibration", {})),
             ViewSettings.from_dict(raw.get("display", {})),
             AnalysisSettings.from_dict(raw.get("analysis", {})),
+            EdgeSettings.from_dict(raw.get("edges", {})),
             findings,
             issue,
         )

@@ -1,14 +1,14 @@
 import {
   $, $$, ROLE, availableRoles, badge, bindCanvas, button, changeLabel, definition, download,
   drawPoints, e, field, format, histogram, itemCard, metrics, normalizedPoint,
-  num, percent, request, saveBlob, submit, table, wireForm,
+  num, percent, readable, request, saveBlob, submit, table, wireForm,
 } from "./ui.js";
 import {showCalibration, showPlacement, showPlacementReview} from "./captures.js";
 import {showFindingForm} from "./reviews.js";
 
 const LAYERS = [
   ["panel", "EL image"], ["support", "Support"], ["quality", "Quality"], ["intensity", "Cell levels"],
-  ["dark", "Dark regions"], ["cracks", "Crack traces"], ["response", "Current response"],
+  ["dark", "Dark regions"], ["cracks", "Crack traces"], ["edges", "Cut edges"], ["response", "Current response"],
   ["strings", "Strings"], ["calibration", "Calibration"],
 ];
 const TABS = Object.fromEntries(LAYERS);
@@ -19,6 +19,7 @@ const LEGENDS = {
   intensity: [["#464197", "Lower signal"], ["#8ad0a1", "Higher signal"]],
   dark: [["#f5a968", "Dark evidence"]],
   cracks: [["#ff7b98", "Trace"], ["#ffe2a1", "Endpoint"], ["#9ce8d4", "Junction"], ["#638fc0", "Busbar band"]],
+  edges: [["#fb964b", "Deactivated band"], ["#f4606c", "Setback"], ["#7896eb", "Recapture gap"], ["#7bdfbc", "Cut boundary"]],
   response: [["#a1387b", "Weaker"], ["#f6ca78", "Reference range"], ["#20579e", "Stronger"]],
   strings: [["#a1387b", "Lower relative signal"], ["#40aeac", "Higher relative signal"]],
   calibration: [["#dc9b49", "Invalid reference"], ["#38649d", "Signal at floor"]],
@@ -33,6 +34,9 @@ const COLS = {
     ["Open boundary", "open_boundary", join]],
   cracks: [["Trace", "id"], ["Cell", "cell"], ["Length px", "length_px"], ["Length mm", "length_mm"], ["Axis °", "axis_degrees"],
     ["Ends", "endpoints", length], ["Junctions", "junctions", length]],
+  edges: [["Cell", "cell"], ["Face", "face"], ["Edge mm", "edge_length_mm"], ["Mean setback mm", "mean_setback_mm"],
+    ["Max setback mm", "max_setback_mm"], ["Deactivated mm²", "deactivated_area_mm2"],
+    ["Recapture px", "missing_positions"], ["Gaps", "missing_segments", length], ["Status", "status", readable]],
   response: [["Cell", "cell"], ["Overlap", "support", percent], ["Ratio", "ratio"], ["Relative", "relative"],
     ["Weak px", "weak_fraction", percent], ["Assessment", "assessment"]],
   strings: [["String", "string"], ["Support", "coverage", percent], ["Median", "median_relative"], ["Range", "p90_p10_span"],
@@ -223,6 +227,11 @@ function metricRows(kind, value) {
       get("Ratio reference", "reference_ratio"), get("Overlap pixels", "shared_pixels"),
     ],
     strings: [get("Strings", "groups"), get("Flagged strings", "groups_with_flags")],
+    edges: [
+      get("Reviewed edges", "cell_edges"), get("Reliable edges", "reliable_edges"),
+      get("Edge length px", "edge_length_px"), get("Deactivated pixels", "deactivated_pixels"),
+      get("Recapture positions", "missing_positions"), get("Missing fraction", "missing_fraction", percent),
+    ],
   }[kind] || [];
 }
 
@@ -236,7 +245,9 @@ async function loadLayer(app, root, kind, role, version) {
       + histogram(model.summary.histogram ?? model.summary.relative_histogram, "Signal distribution")
       + (model.summary.messages || []).map((message) => `<p class="warning">${e(message)}</p>`).join("");
     result.innerHTML = `<div class="card-header"><h2>${e(TABS[kind])} measurements</h2><div class="toolbar">
-      ${button("measurement-settings", "Thresholds", "compact", app.case.state === "issued")}
+      ${kind === "edges"
+        ? button("edge-settings", "Edge setup", "compact", app.case.state === "issued")
+        : button("measurement-settings", "Thresholds", "compact", app.case.state === "issued")}
       ${download(app.url(`/measure/${kind}`, {role, format: "csv"}), "CSV")}</div></div>`;
     result.innerHTML += kind === "calibration"
       ? `<div class="card-pad">${definition([
@@ -251,7 +262,8 @@ async function loadLayer(app, root, kind, role, version) {
     $$("[data-cell]", result).forEach((node) => {
       node.onclick = () => selectCell(app, root, role, node.dataset.cell);
     });
-    $("#measurement-settings", result).onclick = () => analysisDialog(app);
+    $("#measurement-settings", result)?.addEventListener("click", () => analysisDialog(app));
+    $("#edge-settings", result)?.addEventListener("click", () => edgeSettingsDialog(app));
   } catch (error) {
     if (app.renderVersion !== version) return;
     summary.innerHTML = `<p class="error">${e(error.message)}</p>`;
@@ -297,10 +309,22 @@ async function loadCell(app, root, role, cell) {
   if (version !== app.renderVersion || power.cell !== cell) return;
   const probe = power.probe;
   const plot = $("#pixel-data", root);
+  const edgeRows = (value.edges || []).map((edge) => {
+    const setback = edge.status === "measured"
+      ? `${format(edge.mean_setback_mm ?? edge.mean_setback_px)} / ${format(edge.max_setback_mm ?? edge.max_setback_px)} mm`
+      : "Unreliable";
+    const recapture = edge.missing_positions
+      ? `${edge.missing_positions} px · ${edge.missing_segments.length} gap(s)` : "None";
+    return [
+      `Cut edge ${edge.face}`,
+      `setback mean/max ${setback} · deactivated ${format(edge.deactivated_area_mm2)} mm² · recapture ${recapture}`,
+    ];
+  });
   $(".card-header", $("#cell-card", root)).innerHTML = `<h2>Cell and pixel</h2>${badge(cell, "neutral")}`;
   plot.innerHTML = `<div class="section-stack">${definition([
     ["Cell", cell], ["String", value.string], ["Median signal", format(value.intensity.median)], ["Support", percent(value.intensity.support)],
     ["Dark regions", value.dark.length], ["Crack traces", value.cracks.length],
+    ...edgeRows,
     ...(probe ? [["Plane pixel", `${probe.x}, ${probe.y}`], ["Sensor point", probe.source.map((x) => format(x, 2)).join(", ")],
       ["Signal", format(probe.signal, 5)], ["Status", probe.warnings.join(", ") || "Usable"],
       ...(probe.response ? [["Paired ratio", format(probe.response.ratio)]] : [])] : []),
@@ -424,6 +448,48 @@ function analysisDialog(app) {
     ${field("Busbar positions across the cell (fractions)", "busbars", (settings.busbars || []).join(", "), {wide: true, max: 90})}
     </div><p class="form-error" hidden></p><div class="form-actions">${submit("Save thresholds")}</div></form>`);
   wireForm(root, async (data) => { await app.patch("analysis", data, "Measurements recalculated."); app.modal.close(); });
+}
+
+function edgeSettingsDialog(app) {
+  const settings = app.case.edges;
+  const horizontal = settings.axis === "horizontal";
+  const firstLabel = horizontal ? "Inspect top face" : "Inspect left face";
+  const secondLabel = horizontal ? "Inspect bottom face" : "Inspect right face";
+  const firstName = horizontal ? "top_face" : "left_face";
+  const secondName = horizontal ? "bottom_face" : "right_face";
+  const root = app.openDialog("Cut edge setup", `<form><div class="fields">
+    <label class="wide">Cut edge inspection
+      <select name="enabled" aria-label="Cut edge inspection">
+        <option value="true" ${settings.enabled ? "selected" : ""}>Enabled</option>
+        <option value="false" ${settings.enabled ? "" : "selected"}>Disabled</option>
+      </select></label>
+    ${field("Cut edge direction", "axis", settings.axis, {wide: true,
+      values: [["vertical", "Vertical seam (column boundary)"], ["horizontal", "Horizontal seam (row boundary)"]]})}
+    ${num("Seam boundary fraction", "boundary", settings.boundary, .02, .98, .01)}
+    <label class="wide"><input type="checkbox" name="${firstName}" value="true" ${settings.left_face ? "checked" : ""}> ${e(firstLabel)}</label>
+    <label class="wide"><input type="checkbox" name="${secondName}" value="true" ${settings.right_face ? "checked" : ""}> ${e(secondLabel)}</label>
+    ${num("Seam clearance (px)", "seam_gap_px", settings.seam_gap_px, 0, 12)}
+    ${num("Minimum edge footprint (px)", "edge_footprint", settings.edge_footprint, 2, 120)}
+    ${num("Maximum edge setback (px)", "max_setback_px", settings.max_setback_px, 4, 96)}
+    ${num("Recapture gap merge (px)", "merge_gap_px", settings.merge_gap_px, 0, 24)}
+    </div>
+    <p class="small-copy">Setback follows only dark bands connected to the cut boundary. A detached dark spot inside the cell is excluded. Recapture gaps mark seam segments with no readable support.</p>
+    <p class="form-error" hidden></p><div class="form-actions">${submit("Save edge setup")}</div></form>`);
+  wireForm(root, async (data, form) => {
+    const payload = {
+      enabled: form.elements.enabled.value === "true",
+      axis: data.axis,
+      boundary: Number(data.boundary),
+      seam_gap_px: Number(data.seam_gap_px),
+      edge_footprint: Number(data.edge_footprint),
+      max_setback_px: Number(data.max_setback_px),
+      merge_gap_px: Number(data.merge_gap_px),
+    };
+    payload[firstName] = Boolean(form.elements[firstName]?.checked);
+    payload[secondName] = Boolean(form.elements[secondName]?.checked);
+    await app.patch("edges", payload, "Cut edge setup saved.");
+    app.modal.close();
+  });
 }
 
 function compareDialog(app) {
