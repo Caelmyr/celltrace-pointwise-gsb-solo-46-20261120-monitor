@@ -1,6 +1,6 @@
 import {
   $, $$, ROLE, badge, button, changeLabel, dateLabel, definition, download, e, field, format,
-  itemCard, metrics, percent, request, submit, table, wireForm,
+  itemCard, metrics, num, percent, request, submit, table, wireForm,
 } from "./ui.js";
 
 const CATEGORIES = [["dark", "Dark area"], ["crack", "Crack"], ["suspect", "Needs review"], ["capture", "Capture artifact"], ["general", "General"]];
@@ -88,6 +88,7 @@ export async function renderReport(app, root) {
   const viewAt = app.renderVersion;
   const item = app.case;
   if (item.issue) {
+    const gate = item.issue.release_gate;
     root.innerHTML = `<div class="page-stack">
       ${itemCard("Issued inspection report", `<div class="section-stack">
          ${definition([
@@ -95,6 +96,13 @@ export async function renderReport(app, root) {
           ["Issued", dateLabel(item.issue.at)], ["Source revision", item.issue.review_revision],
           ["Decision note", item.issue.decision_note || "—"],
         ])}
+        ${gate ? `<h3 class="section-title">Dark-area release gate</h3>${definition([
+          ["Per-cell limit", gate.cell_dark_limit_mm2 == null ? "Not set" : `${format(gate.cell_dark_limit_mm2)} mm²`],
+          ["Gate result", changeLabel(gate.result)],
+          ["Judged cells", gate.judged_cells.join(", ") || "—"],
+          ["Cells over limit", gate.exceeding_cells.join(", ") || "—"],
+          ["Upper-bound total", gate.upper_mm2 == null ? `${format(gate.upper_px)} px` : `${format(gate.upper_mm2)} mm²`],
+        ])}` : ""}
         <img class="card-image" src="${e(app.url("/report/cover"))}" alt="Archived image evidence with finding outlines">
         <div class="toolbar"><a class="button primary" href="${e(app.url("/report/html"))}" target="_blank" rel="noopener">Open printable report</a>
           ${download(app.url("/report/archive"), "Issued evidence ZIP")}
@@ -117,23 +125,83 @@ export async function renderReport(app, root) {
       ])}${messages}
       <div class="toolbar">
       ${button("issue-review-report", "Issue inspection report", "primary", report.blockers.length > 0)}
+      ${button("edit-release-rule", "Release rule")}
       ${download(app.url("/export/exchange"), "Working exchange ZIP")}
       </div></div>`)}
+      ${releaseGateCard(report.release_gate)}
       <section class="card"><div class="card-header"><h2>Evidence to include</h2></div>
        ${table([["Measurement", "analysis"], ["Rows", "rows"]], sectionRows)}</section></div>`;
-    $("#issue-review-report", root).onclick = () => issueDialog(app);
+    $("#issue-review-report", root).onclick = () => issueDialog(app, report.release_gate);
+    $("#edit-release-rule", root).onclick = () => releaseRuleDialog(app);
   } catch (error) {
     if (app.renderVersion !== viewAt) return;
     root.innerHTML = itemCard("Report preparation", `<p class="error">${e(error.message)}</p>`);
   }
 }
 
-function issueDialog(app) {
+const GATE_RESULTS = {
+  pass: ["Within limit", ""], exceed: ["Crosses limit", "training"],
+  unevaluable: ["Not evaluable", "training"], unset: ["No limit set", "neutral"],
+};
+
+function releaseGateCard(gate) {
+  if (!gate) return "";
+  const metric = gate.scale_mm_per_px != null;
+  const unit = metric ? "mm²" : "px";
+  const key = metric ? "mm2" : "px";
+  const [label, variant] = GATE_RESULTS[gate.result];
+  const notes = {
+    pass: "Every judged cell stays below the per-cell dark-area limit. Release remains permitted.",
+    exceed: `The upper bound crosses the limit in ${gate.exceeding_cells.join(", ")}. Recapture or re-review these cells before release.`,
+    unevaluable: "Declare both physical panel dimensions to evaluate the dark-area release limit.",
+    unset: "Set a per-cell dark-area limit with Release rule to enable the release gate.",
+  }[gate.result];
+  const rows = gate.cells.map((row) => ({
+    cell: row.cell, evidence: row[`evidence_${key}`], extension: row[`extension_${key}`],
+    unreviewed: row[`unreviewed_${key}`], missing: row[`missing_${key}`], upper: row[`upper_${key}`],
+    verdict: row.verdict,
+  }));
+  const pending = gate.pending_findings.length ? `<h3 class="section-title">Annotations pending verification</h3>
+    ${table([["Finding", "title"], ["Cell", "cell", (value) => value || "—"], ["Review", "status", changeLabel],
+      ["Source", "source_status", changeLabel]], gate.pending_findings)}
+    <p class="small-copy">Stale annotations stay excluded from the evidence until redrawn and confirmed.</p>` : "";
+  return `<section class="card"><div class="card-header"><h2>Dark-area release gate</h2>${badge(label, variant)}</div>
+    <div class="card-pad section-stack">${metrics([
+      ["Per-cell limit", gate.rule.cell_dark_limit_mm2 == null ? "—" : `${format(gate.rule.cell_dark_limit_mm2)} mm²`],
+      ["Judged cells", `${gate.judged_cells.length} / ${gate.cells_total}`],
+      ["Cells over limit", gate.exceeding_cells.length],
+      ["Confirmed findings used", gate.confirmed_findings.length],
+    ])}<p class="${["pass", "unset"].includes(gate.result) ? "info" : "warning"}">${e(notes)}</p>
+    ${table([["Cell", "cell"], [`Confirmed ${unit}`, "evidence"], [`Extension ${unit}`, "extension"],
+      [`Unreviewed ${unit}`, "unreviewed"], [`Unsupported ${unit}`, "missing"],
+      [`Upper bound ${unit}`, "upper"], ["Verdict", "verdict", (value) => value ? changeLabel(value) : "—"]], rows)}
+    ${pending}</div></section>`;
+}
+
+function releaseRuleDialog(app) {
+  const rule = app.case.release || {};
+  const root = app.openDialog("Dark-area release rule", `<form><div class="fields">
+    ${num("Per-cell dark-area limit (mm²)", "cell_dark_limit_mm2", rule.cell_dark_limit_mm2, 0.001, 250000, 0.001, false)}
+    </div><p class="small-copy">Current confirmed findings on the high-current plane are merged so overlapping
+    annotations count once, then intersected with the measured dark pixels. Dark regions only partially covered
+    extend the cell's worst case to their full connected area, and unsupported coverage inside confirmed regions
+    counts toward the same upper bound. Leave empty to disable the gate.</p>
+    <p class="form-error" hidden></p><div class="form-actions">${submit("Save release rule")}</div></form>`);
+  wireForm(root, async (values) => {
+    await app.patch("release", values, "Release rule saved.");
+    app.modal.close();
+  });
+}
+
+function issueDialog(app, gate) {
   const outstanding = app.case.findings.some((finding) => ["open", "hold"].includes(finding.status));
+  const blocked = gate != null && ["exceed", "unevaluable"].includes(gate.result);
+  const preset = outstanding ? "hold" : blocked ? "reinspect" : "release";
   const root = app.openDialog("Issue inspection report", `<form><div class="fields">
-    ${field("Disposition", "disposition", outstanding ? "hold" : "release", {values: DECISIONS})}
+    ${field("Disposition", "disposition", preset, {values: DECISIONS})}
     ${field("Decision note", "decision_note", "", {multiline: true, wide: true, max: 1400})}
-    </div><p class="small-copy">Issuing captures the current measured evidence. Continue editing from a working copy after issue.</p>
+    </div>${blocked ? '<p class="warning">The dark-area release gate crosses the limit. Release is rejected until the cells are recaptured or re-reviewed.</p>' : ""}
+    <p class="small-copy">Issuing captures the current measured evidence. Continue editing from a working copy after issue.</p>
     <p class="form-error" hidden></p><div class="form-actions">${submit("Issue report")}</div></form>`);
   wireForm(root, async (values) => {
     const saved = await request(app.url("/report"), "POST", {...values, revision: app.case.revision});

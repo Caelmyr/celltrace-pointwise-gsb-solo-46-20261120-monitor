@@ -8,12 +8,13 @@ from .inspection import Inspections
 from .lot import source as lot_source
 from .model import Issue, ROLE_LABELS, choice, text, utcnow
 from .packets import PacketWriter
+from .release import release_assessment
 from .render import RenderOptions, render_layer
 from .store import Store, data_digest, serial_json
 from .tables import csv_data
 
 
-REPORT_SCHEMA = "celltrace-issued-report-v1"
+REPORT_SCHEMA = "celltrace-issued-report-v2"
 DISPOSITIONS = frozenset(("release", "hold", "reinspect"))
 REPORT_KINDS = ("quality", "calibration", "intensity", "dark", "cracks", "strings")
 
@@ -53,6 +54,18 @@ def summarize_for_issue(inspection, engine: Engine, events: list[dict]) -> dict:
             messages.append(f"Response evidence is unavailable. {error}")
         else:
             sections["response"] = {"summary": result["summary"], "records": len(result["rows"])}
+    gate = None
+    if "high" in inspection.active:
+        context = engine.panel_context(inspection, "high")
+        gate = release_assessment(inspection, context, engine.dark(inspection, context))
+        if gate["result"] == "exceed":
+            messages.append(
+                "Dark-area upper bound crosses the release limit in "
+                + ", ".join(gate["exceeding_cells"])
+                + ". Recapture or re-review these cells before release."
+            )
+        elif gate["result"] == "unevaluable":
+            messages.append("Declare both physical panel dimensions to evaluate the dark-area release limit.")
     active = {role: capture_info(inspection.captures[identifier]) for role, identifier in inspection.active.items()}
     return {
         "module": inspection.module,
@@ -67,6 +80,7 @@ def summarize_for_issue(inspection, engine: Engine, events: list[dict]) -> dict:
         "capture_inventory": active,
         "findings": findings,
         "sections": sections,
+        "release_gate": gate,
         "events": events[:14],
         "blockers": blockers,
         "messages": messages,
@@ -106,6 +120,8 @@ def report_documents(inspection, engine: Engine, preview: dict) -> tuple[dict, d
             rows = [{"metric": name, "value": value} for name, value in measurement["summary"].items()]
         tables[kind] = csv_data(kind, rows)
     tables["findings"] = csv_data("findings", finding_rows(preview["findings"]))
+    if preview["release_gate"] is not None:
+        tables["release"] = csv_data("release", preview["release_gate"]["cells"])
     return media, tables
 
 
@@ -115,6 +131,15 @@ def issue_report(store: Store, engine: Engine, service: Inspections, identifier:
     note = text(raw.get("decision_note", ""), "Decision note", 1400, allow_blank=True)
     preview = summarize_for_issue(item, engine, store.events(identifier))
     blockers = preview["blockers"]
+    gate = preview["release_gate"]
+    if disposition == "release" and gate is not None:
+        if gate["result"] == "unevaluable":
+            blockers.append("Declare both physical panel dimensions to evaluate the dark-area release limit.")
+        if gate["exceeding_cells"]:
+            blockers.append(
+                "Dark-area upper bound crosses the release limit in cells "
+                + ", ".join(gate["exceeding_cells"]) + ". Recapture or re-review these cells."
+            )
     if disposition == "release" and any(finding.status in ("open", "hold") for finding in item.findings):
         blockers.append("Close outstanding findings or choose hold or reinspection.")
     if disposition != "release" and not note:
@@ -132,6 +157,7 @@ def issue_report(store: Store, engine: Engine, service: Inspections, identifier:
         "disposition": disposition,
         "decision_note": note,
         "inspection": preview,
+        "release_gate": gate,
         "images": media_digests,
         "tables": table_digests,
         "config_digest": data_digest(item.to_dict()),
@@ -158,6 +184,14 @@ def issue_report(store: Store, engine: Engine, service: Inspections, identifier:
         "disposition": disposition, "decision_note": note, "archive": archive_id, "html": html_id,
         "cover": media_digests["panel"], "media": media_digests, "table_digests": table_digests,
         "lot_snapshot": lot_digest,
+        "release_gate": None if gate is None else {
+            "result": gate["result"],
+            "cell_dark_limit_mm2": gate["rule"]["cell_dark_limit_mm2"],
+            "judged_cells": gate["judged_cells"],
+            "exceeding_cells": gate["exceeding_cells"],
+            "upper_px": gate["totals"]["upper_px"],
+            "upper_mm2": gate["totals"].get("upper_mm2"),
+        },
     }
     item.state = "issued"
     return store.save(item, item.revision, "report issued", {
@@ -223,6 +257,7 @@ def printable(payload: dict, media: dict[str, bytes]) -> bytes:
       </header>
       {definition_list(metadata)}
       <section><h2>Disposition</h2>{definition_list(decisions)}{warnings(report["messages"])}</section>
+      {release_gate_section(payload.get("release_gate"))}
       <section><h2>Image evidence</h2><div class="figures">{pictures}</div></section>
       <section><h2>Measurements</h2>{definition_list(highlights)}</section>
       <section><h2>Reviewed findings</h2>
@@ -246,6 +281,45 @@ def image_title(kind):
         "dark": "Connected dark evidence", "cracks": "Thin dark-line candidates",
         "response": "Paired-current relative response",
     }[kind]
+
+
+def release_gate_section(gate) -> str:
+    if gate is None:
+        return ""
+    metric = gate["scale_mm_per_px"] is not None
+    unit = "mm²" if metric else "px"
+    key = "mm2" if metric else "px"
+    limit = gate["rule"]["cell_dark_limit_mm2"]
+    summary = [
+        ("Result", gate["result"].replace("_", " ").title()),
+        ("Per-cell dark-area limit", f"{limit} mm²" if limit is not None else "Not set"),
+        ("Evidence capture", gate["capture"]),
+        ("Judged cells", ", ".join(gate["judged_cells"]) or "—"),
+        ("Cells over limit", ", ".join(gate["exceeding_cells"]) or "—"),
+        ("Confirmed findings used", len(gate["confirmed_findings"])),
+    ]
+    rows = [
+        [
+            row["cell"], row[f"evidence_{key}"], row[f"extension_{key}"], row[f"unreviewed_{key}"],
+            row[f"missing_{key}"], row[f"upper_{key}"],
+            row["limit_mm2"] if metric else "—", (row["verdict"] or "—").title(),
+        ]
+        for row in gate["cells"]
+    ]
+    pending = [
+        [row["title"], row["cell"], row["status"], row["source_status"]]
+        for row in gate["pending_findings"]
+    ]
+    body = f"""
+      <section><h2>Dark-area release gate</h2>{definition_list(summary)}
+       {html_table(
+          ("Cell", f"Confirmed {unit}", f"Extension {unit}", f"Unreviewed {unit}",
+           f"Unsupported {unit}", f"Upper bound {unit}", "Limit mm²", "Verdict"), rows)}
+       <h3>Annotations pending verification</h3>
+       {html_table(("Observation", "Cell", "State", "Source"), pending)}
+      </section>
+    """
+    return body
 
 
 def report_highlights(sections):

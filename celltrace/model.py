@@ -320,6 +320,21 @@ class AnalysisSettings:
 
 
 @dataclass(frozen=True)
+class ReleaseRule:
+    cell_dark_limit_mm2: float | None = None
+
+    @classmethod
+    def from_dict(cls, raw: dict):
+        raw = mapping(raw, "Release rule")
+        limit = raw.get("cell_dark_limit_mm2")
+        if limit in (None, ""):
+            limit = None
+        else:
+            limit = real(limit, "Per-cell dark-area limit", 0.001, 250000)
+        return cls(limit)
+
+
+@dataclass(frozen=True)
 class Finding:
     id: str
     title: str
@@ -372,6 +387,7 @@ class Inspection:
     calibration: Calibration = field(default_factory=Calibration)
     display: ViewSettings = field(default_factory=ViewSettings)
     analysis: AnalysisSettings = field(default_factory=AnalysisSettings)
+    release: ReleaseRule = field(default_factory=ReleaseRule)
     findings: list[Finding] = field(default_factory=list)
     issue: dict | None = None
 
@@ -441,6 +457,7 @@ class Inspection:
             Calibration.from_dict(raw.get("calibration", {})),
             ViewSettings.from_dict(raw.get("display", {})),
             AnalysisSettings.from_dict(raw.get("analysis", {})),
+            ReleaseRule.from_dict(raw.get("release", {})),
             findings,
             issue,
         )

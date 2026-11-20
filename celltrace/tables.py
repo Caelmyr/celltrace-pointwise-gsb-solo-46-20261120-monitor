@@ -36,6 +36,11 @@ COLUMNS = {
     ),
     "findings": ("id", "title", "category", "status", "source_role", "cell", "note", "source_status",
                  "capture_digest", "capture", "anchor", "points", "created_at", "updated_at"),
+    "release": (
+        "cell", "string", "region_px", "evidence_px", "extension_px", "unreviewed_px", "missing_px",
+        "upper_px", "region_mm2", "evidence_mm2", "extension_mm2", "unreviewed_mm2", "missing_mm2",
+        "upper_mm2", "limit_mm2", "verdict",
+    ),
     "calibration": ("metric", "value"),
     "placement": ("marker", "axis", "expected", "detected", "offset", "start", "end", "data",
                   "coverage", "contrast", "status"),

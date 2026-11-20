@@ -7,7 +7,7 @@ from .geometry import default_placement, transform_for
 from .images import SensorImage, decode_source, safe_name
 from .model import (
     AnalysisSettings, CAPTURE_ROLES, Calibration, Capture, Inspection, Issue, Placement, Plane,
-    SENSOR_ROLES, ViewSettings, boolean, choice, file_id, integer, mapping, real, text, utcnow,
+    ReleaseRule, SENSOR_ROLES, ViewSettings, boolean, choice, file_id, integer, mapping, real, text, utcnow,
 )
 from .store import Store, new_id, summary
 
@@ -130,6 +130,9 @@ class Inspections:
         elif operation == "analysis":
             item.analysis = AnalysisSettings.from_dict(raw)
             message, details = "measurement thresholds updated", asdict(item.analysis)
+        elif operation == "release":
+            item.release = ReleaseRule.from_dict(raw)
+            message, details = "release rule updated", asdict(item.release)
         elif operation == "selection":
             capture = item.capture(raw.get("capture"))
             item.active[capture.role] = capture.id
